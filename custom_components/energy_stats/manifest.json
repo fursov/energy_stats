@@ -1,0 +1,11 @@
+{
+  "domain": "energy_stats",
+  "name": "energy_stats",
+  "documentation": "https://github.com/fursov/energy_stats",
+  "issue_tracker": "https://github.com/fursov/energy_stats/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@fursov"],
+  "iot_class": "calculated",
+  "version": "0.0.1"
+}
