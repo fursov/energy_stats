@@ -1,6 +1,6 @@
 {
-  "domain": "energy_stats",
-  "name": "energy_stats",
+  "domain": "entsoe_stats",
+  "name": "ENTSO-E price statistics",
   "documentation": "https://github.com/fursov/energy_stats",
   "issue_tracker": "https://github.com/fursov/energy_stats/issues",
   "requirements": [],

@@ -30,13 +30,13 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 
 def setup_platform(
-    hass: HomeAssistant,
+    _hass: HomeAssistant,
     config: ConfigType,
     add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     entsoe_prices_entity = config[ENTSOE_CONFIG_ID]
-    add_entities([EnergyStatsCalculator(entsoe_prices_entity)])
+    add_entities([EntsoeStatsCalculator(entsoe_prices_entity)])
 
 
 def convert_entsoe_data(entsoe_prices):
@@ -52,7 +52,7 @@ def convert_entsoe_data(entsoe_prices):
     )
 
 
-def get_double_precision_for_last_24_hours(hourprices, time_now):
+def get_double_precision_for_last_24_hours(hourprices, time_now) -> tuple:
     # We are monitoring prices within 24 hours. If we have prices for the future
     # then start from now. If we do not have enough future data, limit window
     # to the 24 hour in the past from last known time
@@ -66,7 +66,7 @@ def get_double_precision_for_last_24_hours(hourprices, time_now):
     half_hour_prices_24h = []
     for item in hourprices:
         hour, price = item["time"], item["price"]
-        if hour >= min_time and hour <= max_time:
+        if min_time <= hour <= max_time:
             hour_prices_24h.append(
                 {
                     "time": hour,
@@ -89,12 +89,12 @@ def get_double_precision_for_last_24_hours(hourprices, time_now):
 
 
 def get_stats_for_consumption_duration(
-    hour_prices_24h, half_hour_prices_24h, duration: int, time_now: datetime
-):
+    hour_prices_24h, half_hour_prices_24h, duration: float, time_now: datetime
+) -> dict:
     total_price = sum([value["price"] for value in half_hour_prices_24h])
     window = ceil(duration * 2)
     if window > len(half_hour_prices_24h):
-        log.warning("Not enough data for window: %f" % duration)
+        log.warning("Not enough data for window: %f", duration)
         return {
             "window": duration,
             "time": STATE_UNKNOWN,
@@ -130,7 +130,7 @@ def get_stats_for_consumption_duration(
     high_prices = tuple(
         [value for value in hour_prices_24h if value["price"] > avrg_other_price]
     )
-    now_high_price = any([value["time"] == time_now for value in high_prices])
+    now_high_price = any(value["time"] == time_now for value in high_prices)
     return {
         "window": duration,
         "time": half_hour_prices_24h[min_price_index]["time"],
@@ -142,15 +142,17 @@ def get_stats_for_consumption_duration(
     }
 
 
-class EnergyStatsCalculator(SensorEntity):
+class EntsoeStatsCalculator(SensorEntity):
     _attr_icon = "mdi:flash"
-    _attr_name = "energy_stats_prices"
+    _attr_name = "entsoe_stats_prices"
     _attr_native_unit_of_measurement = CURRENCY_EURO
     _attr_unique_id = "prices"
 
     def __init__(self, entsoe_prices_entity: str):
         self._entsoe_prices_entity = entsoe_prices_entity
         self._prices = STATE_UNKNOWN
+        self._known_prices = STATE_UNKNOWN
+        self._best_prices = STATE_UNKNOWN
 
     @property
     def state(self):
@@ -164,12 +166,14 @@ class EnergyStatsCalculator(SensorEntity):
         }
 
     def update(self):
+        log.debug("Sensor update called")
         entsoe_prices = self.hass.states.get(self._entsoe_prices_entity)
         try:
             self._known_prices = convert_entsoe_data(entsoe_prices)
-        except Exception as e:
+        except Exception as exc:
             log.exception(
-                f"cannot convert ENTSOe prices to usable format. Original message {repr(e)}"
+                "cannot convert ENTSOe prices to usable format. Original message %s",
+                repr(exc),
             )
         self._prices = min(value["price"] for value in self._known_prices)
         time_now = dt.now()

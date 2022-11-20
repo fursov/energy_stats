@@ -3,7 +3,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Config, HomeAssistant
 
-DOMAIN = "energy_stats"
+DOMAIN = "entsoe_stats"
 PLATFORMS = ["sensor"]
 
 
