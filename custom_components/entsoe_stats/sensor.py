@@ -19,12 +19,16 @@ DEFAULT_WINDOWS_LENGTHS = tuple(
     1 + 0.5 * i for i in range(11)
 )  # Default from 1h to 6h with step 0.5
 ENTSOE_CONFIG_ID = "entsoe_prices_entity"
+HIGH_PRICE_MARGIN_RATIO = "high_price_margin_ratio"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Optional(
             ENTSOE_CONFIG_ID, default="sensor.average_electricity_price_today"
         ): cv.string,
+        vol.Optional(
+            HIGH_PRICE_MARGIN_RATIO, default=0.0
+        ): vol.Coerce(float),
     }
 )
 
@@ -36,7 +40,8 @@ def setup_platform(
     _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     entsoe_prices_entity = config[ENTSOE_CONFIG_ID]
-    add_entities([EntsoeStatsCalculator(entsoe_prices_entity)])
+    high_price_margin_ratio = config[HIGH_PRICE_MARGIN_RATIO]
+    add_entities([EntsoeStatsCalculator(entsoe_prices_entity, high_price_margin_ratio)])
 
 
 def convert_entsoe_data(entsoe_prices):
@@ -89,7 +94,7 @@ def get_double_precision_for_last_24_hours(hourprices, time_now) -> tuple:
 
 
 def get_stats_for_consumption_duration(
-    hour_prices_24h, half_hour_prices_24h, duration: float, time_now: datetime
+    hour_prices_24h, half_hour_prices_24h, duration: float, high_price_margin_ratio: float, time_now: datetime
 ) -> dict:
     total_price = sum([value["price"] for value in half_hour_prices_24h])
     window = ceil(duration * 2)
@@ -127,8 +132,9 @@ def get_stats_for_consumption_duration(
     avrg_best_price = total_best_price / duration
     total_other_price = total_price - total_best_price
     avrg_other_price = total_other_price / ((len(half_hour_prices_24h) - window) / 2)
+    high_price_limit = avrg_other_price * (1 + high_price_margin_ratio)
     high_prices = tuple(
-        [value for value in hour_prices_24h if value["price"] > avrg_other_price]
+        [value for value in hour_prices_24h if value["price"] > high_price_limit]
     )
     now_high_price = any(value["time"] == time_now for value in high_prices)
     return {
@@ -148,8 +154,9 @@ class EntsoeStatsCalculator(SensorEntity):
     _attr_native_unit_of_measurement = CURRENCY_EURO
     _attr_unique_id = "prices"
 
-    def __init__(self, entsoe_prices_entity: str):
+    def __init__(self, entsoe_prices_entity: str, high_price_margin_ratio: float):
         self._entsoe_prices_entity = entsoe_prices_entity
+        self._high_price_margin_ratio = high_price_margin_ratio
         self._prices = STATE_UNKNOWN
         self._known_prices = STATE_UNKNOWN
         self._best_prices = STATE_UNKNOWN
@@ -183,5 +190,5 @@ class EntsoeStatsCalculator(SensorEntity):
         self._best_prices = {}
         for duration in DEFAULT_WINDOWS_LENGTHS:
             self._best_prices[duration] = get_stats_for_consumption_duration(
-                hour_prices_24h, half_hour_prices_24h, duration, time_now
+                hour_prices_24h, half_hour_prices_24h, duration, self._high_price_margin_ratio, time_now
             )
