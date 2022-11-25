@@ -26,14 +26,12 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(
             ENTSOE_CONFIG_ID, default="sensor.average_electricity_price_today"
         ): cv.string,
-        vol.Optional(
-            HIGH_PRICE_MARGIN_RATIO, default=0.0
-        ): vol.Coerce(float),
+        vol.Optional(HIGH_PRICE_MARGIN_RATIO, default=0.0): vol.Coerce(float),
     }
 )
 
 
-def setup_platform(
+async def async_setup_platform(
     _hass: HomeAssistant,
     config: ConfigType,
     add_entities: AddEntitiesCallback,
@@ -94,7 +92,11 @@ def get_double_precision_for_last_24_hours(hourprices, time_now) -> tuple:
 
 
 def get_stats_for_consumption_duration(
-    hour_prices_24h, half_hour_prices_24h, duration: float, high_price_margin_ratio: float, time_now: datetime
+    hour_prices_24h,
+    half_hour_prices_24h,
+    duration: float,
+    high_price_margin_ratio: float,
+    time_now: datetime,
 ) -> dict:
     total_price = sum([value["price"] for value in half_hour_prices_24h])
     window = ceil(duration * 2)
@@ -157,24 +159,20 @@ class EntsoeStatsCalculator(SensorEntity):
     def __init__(self, entsoe_prices_entity: str, high_price_margin_ratio: float):
         self._entsoe_prices_entity = entsoe_prices_entity
         self._high_price_margin_ratio = high_price_margin_ratio
-        self._prices = STATE_UNKNOWN
+        self._min_price = STATE_UNKNOWN
         self._known_prices = STATE_UNKNOWN
         self._best_prices = STATE_UNKNOWN
 
-    @property
-    def state(self):
-        return self._prices
-
-    @property
-    def extra_state_attributes(self):
-        return {
-            "prices": self._known_prices,
-            "best_prices": self._best_prices,
-        }
-
-    def update(self):
+    async def async_update(self):
         log.debug("Sensor update called")
-        entsoe_prices = self.hass.states.get(self._entsoe_prices_entity)
+        try:
+            entsoe_prices = self.hass.states.get(self._entsoe_prices_entity)
+        except Exception as exc:
+            log.exception(
+                "cannot fetch entsoe prices. Original message %s",
+                repr(exc),
+            )
+        log.debug("%s", str(entsoe_prices))
         try:
             self._known_prices = convert_entsoe_data(entsoe_prices)
         except Exception as exc:
@@ -182,7 +180,7 @@ class EntsoeStatsCalculator(SensorEntity):
                 "cannot convert ENTSOe prices to usable format. Original message %s",
                 repr(exc),
             )
-        self._prices = min(value["price"] for value in self._known_prices)
+        self._min_price = min(value["price"] for value in self._known_prices)
         time_now = dt.now()
         hour_prices_24h, half_hour_prices_24h = get_double_precision_for_last_24_hours(
             self._known_prices, time_now
@@ -190,5 +188,14 @@ class EntsoeStatsCalculator(SensorEntity):
         self._best_prices = {}
         for duration in DEFAULT_WINDOWS_LENGTHS:
             self._best_prices[duration] = get_stats_for_consumption_duration(
-                hour_prices_24h, half_hour_prices_24h, duration, self._high_price_margin_ratio, time_now
+                hour_prices_24h,
+                half_hour_prices_24h,
+                duration,
+                self._high_price_margin_ratio,
+                time_now,
             )
+        self._attr_native_value = self._min_price
+        self._attr_extra_state_attributes = {
+            "prices": self._known_prices,
+            "best_prices": self._best_prices,
+        }
