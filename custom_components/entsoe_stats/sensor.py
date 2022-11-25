@@ -154,6 +154,7 @@ class EntsoeStatsCalculator(SensorEntity):
                 log.debug("Getting prices from previous fetch")
                 entsoe_all_prices = self._previous_prices
         else:
+            log.debug("Using prices fetched from ENTSO-e entity")
             entsoe_all_prices = entsoe_entity_prices.attributes.get("prices")
             self._previous_prices = entsoe_all_prices
         if entsoe_all_prices:
@@ -170,7 +171,7 @@ class EntsoeStatsCalculator(SensorEntity):
         log.debug("Sensor update called")
         known_prices = self._get_entsoe_data()
         if known_prices is None:
-            log.error("Cannot get ENTSO-e prices")
+            log.error("Failed fetching ENTSO-e prices")
             self._attr_native_value = STATE_UNKNOWN
             return
         min_price = min(value["price"] for value in known_prices)
