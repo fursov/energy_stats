@@ -95,6 +95,7 @@ def get_stats_for_consumption_duration(
             "total_best": STATE_UNKNOWN,
             "average_best": STATE_UNKNOWN,
             "average_other_time": STATE_UNKNOWN,
+            "high_price_limit": STATE_UNKNOWN,
             "high_prices": STATE_UNKNOWN,
             "high_price_now": STATE_UNKNOWN,
         }
@@ -126,6 +127,7 @@ def get_stats_for_consumption_duration(
         "total": round(total_best_price, 5),
         "average": round(avrg_best_price, 5),
         "average_other_time": round(avrg_other_price, 5),
+        "high_price_limit": round(high_price_limit, 5),
         "high_prices": high_prices,
         "high_price_now": now_high_price,
     }
