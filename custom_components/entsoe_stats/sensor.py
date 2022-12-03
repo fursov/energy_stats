@@ -16,8 +16,8 @@ from homeassistant.util import dt
 log = logging.getLogger(__name__)
 
 DEFAULT_WINDOWS_LENGTHS = tuple(
-    1 + 0.5 * i for i in range(11)
-)  # Default from 1h to 6h with step 0.5
+    1 + 0.5 * i for i in range(13)
+)  # Default from 1h to 7h with step 0.5
 ENTSOE_CONFIG_ID = "entsoe_prices_entity"
 HIGH_PRICE_MARGIN_RATIO = "high_price_margin_ratio"
 
