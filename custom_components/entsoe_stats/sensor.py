@@ -7,7 +7,7 @@ from math import ceil
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
-from homeassistant.const import CURRENCY_EURO, STATE_UNKNOWN
+from homeassistant.const import CURRENCY_EURO, STATE_UNKNOWN, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -19,12 +19,16 @@ DEFAULT_WINDOWS_LENGTHS = tuple(
     1 + 0.5 * i for i in range(13)
 )  # Default from 1h to 7h with step 0.5
 ENTSOE_CONFIG_ID = "entsoe_prices_entity"
+VARIABLE_TO_STORE_PRICES = "prices_variable"
 HIGH_PRICE_MARGIN_RATIO = "high_price_margin_ratio"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Optional(
             ENTSOE_CONFIG_ID, default="sensor.average_electricity_price_today"
+        ): cv.string,
+        vol.Optional(
+            VARIABLE_TO_STORE_PRICES, default="var.latest_entsoe_prices"
         ): cv.string,
         vol.Optional(HIGH_PRICE_MARGIN_RATIO, default=0.0): vol.Coerce(float),
     }
@@ -38,8 +42,15 @@ async def async_setup_platform(
     _discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     entsoe_prices_entity = config[ENTSOE_CONFIG_ID]
+    prices_variable = config[VARIABLE_TO_STORE_PRICES]
     high_price_margin_ratio = config[HIGH_PRICE_MARGIN_RATIO]
-    add_entities([EntsoeStatsCalculator(entsoe_prices_entity, high_price_margin_ratio)])
+    add_entities(
+        [
+            EntsoeStatsCalculator(
+                entsoe_prices_entity, prices_variable, high_price_margin_ratio
+            )
+        ]
+    )
 
 
 def get_double_precision_for_last_24_hours(hourprices, time_now) -> tuple:
@@ -133,16 +144,45 @@ def get_stats_for_consumption_duration(
     }
 
 
+def generate_artificial_price_data(start_time=None):
+    entsoe_all_prices = []
+    time_now = dt.now().replace(minute=0, second=0, microsecond=0)
+    time_range = 48
+    if time_now.hour < 14:
+        data_start_time = (time_now - timedelta(days=-1)).replace(hour=0)
+    else:
+        data_start_time = time_now.replace(hour=0)
+    for hour in range(time_range):
+        price_time = data_start_time + timedelta(hours=hour)
+        entsoe_all_prices.append(
+            {
+                "time": price_time.isoformat(),
+                "price": 0.3 if 0 <= price_time.hour < 7 else 0.5,
+            }
+        )
+    if start_time:
+        entsoe_all_prices = [
+            value for value in entsoe_all_prices if value["time"] >= start_time
+        ]
+    return entsoe_all_prices
+
+
 class EntsoeStatsCalculator(SensorEntity):
     _attr_icon = "mdi:flash"
     _attr_name = "entsoe_stats_prices"
     _attr_native_unit_of_measurement = CURRENCY_EURO
     _attr_unique_id = "prices"
 
-    def __init__(self, entsoe_prices_entity: str, high_price_margin_ratio: float):
+    def __init__(
+        self,
+        entsoe_prices_entity: str,
+        prices_variable: str,
+        high_price_margin_ratio: float,
+    ):
         self._entsoe_prices_entity = entsoe_prices_entity
         self._high_price_margin_ratio = high_price_margin_ratio
         self._previous_prices = None
+        self._variable_with_saved_latest_entsoe_prices = prices_variable
 
     def _get_entsoe_data(self):
         entsoe_entity_prices = STATE_UNKNOWN
@@ -150,24 +190,61 @@ class EntsoeStatsCalculator(SensorEntity):
             entsoe_entity_prices = self.hass.states.get(self._entsoe_prices_entity)
         except:
             log.warning("Cannot fetch ENTSO-e prices")
+        log.debug("Fetched entsoe values: %s", str(entsoe_entity_prices))
         entsoe_all_prices = None
-        if entsoe_entity_prices == STATE_UNKNOWN:
+        if (
+            (entsoe_entity_prices == STATE_UNKNOWN)
+            or (entsoe_entity_prices is None)
+            or (entsoe_entity_prices.state == STATE_UNAVAILABLE)
+        ):
             if self._previous_prices is not None:
                 log.debug("Getting prices from previous fetch")
                 entsoe_all_prices = self._previous_prices
+            else:
+                log.debug(
+                    "Getting prices from saved variable: %s",
+                    self._variable_with_saved_latest_entsoe_prices,
+                )
+                entsoe_entity_prices = self.hass.states.get(
+                    self._variable_with_saved_latest_entsoe_prices
+                )
+                try:
+                    entsoe_all_prices = entsoe_entity_prices.attributes.get("prices")
+                except:
+                    log.debug(
+                        "No price information in the variable: %s",
+                        str(entsoe_entity_prices),
+                    )
         else:
             log.debug("Using prices fetched from ENTSO-e entity")
             entsoe_all_prices = entsoe_entity_prices.attributes.get("prices")
             self._previous_prices = entsoe_all_prices
-        if entsoe_all_prices:
-            return list(
-                {
-                    "time": datetime.fromisoformat(value["time"]),
-                    "price": float(value["price"]),
-                }
-                for value in entsoe_all_prices
+            self.hass.states.set(
+                self._variable_with_saved_latest_entsoe_prices, entsoe_entity_prices
             )
-        return None
+        if entsoe_all_prices is None:
+            log.debug("Was not able to fetch prices, fill in with artificial data")
+            # Fill in with artificial data making low prices at night
+            entsoe_all_prices = generate_artificial_price_data()
+        else:
+            min_available_time = dt.now() + timedelta(hours=6)
+            if (
+                max_time_in_data := max(value["time"] for value in entsoe_all_prices)
+                < min_available_time
+            ):
+                log.debug("Previous data does not have enough data, generating more")
+                entsoe_all_prices.extend(
+                    generate_artificial_price_data(
+                        max_time_in_data + timedelta(hours=1)
+                    )
+                )
+        return list(
+            {
+                "time": datetime.fromisoformat(value["time"]),
+                "price": float(value["price"]),
+            }
+            for value in entsoe_all_prices
+        )
 
     async def async_update(self):
         log.debug("Sensor update called")
