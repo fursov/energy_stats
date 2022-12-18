@@ -156,7 +156,7 @@ def generate_artificial_price_data(start_time=None):
         price_time = data_start_time + timedelta(hours=hour)
         entsoe_all_prices.append(
             {
-                "time": price_time.isoformat(),
+                "time": price_time,
                 "price": 0.3 if 0 <= price_time.hour < 7 else 0.5,
             }
         )
@@ -181,7 +181,7 @@ class EntsoeStatsCalculator(SensorEntity):
     ):
         self._entsoe_prices_entity = entsoe_prices_entity
         self._high_price_margin_ratio = high_price_margin_ratio
-        self._previous_prices = None
+        self._previous_entsoe_entity_prices = None
         self._variable_with_saved_latest_entsoe_prices = prices_variable
 
     def _get_entsoe_data(self):
@@ -190,16 +190,15 @@ class EntsoeStatsCalculator(SensorEntity):
             entsoe_entity_prices = self.hass.states.get(self._entsoe_prices_entity)
         except:
             log.warning("Cannot fetch ENTSO-e prices")
-        log.debug("Fetched entsoe values: %s", str(entsoe_entity_prices))
         entsoe_all_prices = None
         if (
             (entsoe_entity_prices == STATE_UNKNOWN)
             or (entsoe_entity_prices is None)
             or (entsoe_entity_prices.state == STATE_UNAVAILABLE)
         ):
-            if self._previous_prices is not None:
+            if self._previous_entsoe_entity_prices is not None:
                 log.debug("Getting prices from previous fetch")
-                entsoe_all_prices = self._previous_prices
+                entsoe_entity_prices = self._previous_entsoe_entity_prices
             else:
                 log.debug(
                     "Getting prices from saved variable: %s",
@@ -208,25 +207,16 @@ class EntsoeStatsCalculator(SensorEntity):
                 entsoe_entity_prices = self.hass.states.get(
                     self._variable_with_saved_latest_entsoe_prices
                 )
-                try:
-                    entsoe_all_prices = entsoe_entity_prices.attributes.get("prices")
-                except:
-                    log.debug(
-                        "No price information in the variable: %s",
-                        str(entsoe_entity_prices),
-                    )
         else:
             log.debug("Using prices fetched from ENTSO-e entity")
-            entsoe_all_prices = entsoe_entity_prices.attributes.get("prices")
-            self._previous_prices = entsoe_all_prices
-            self.hass.states.set(
-                self._variable_with_saved_latest_entsoe_prices, entsoe_entity_prices
-            )
-        if entsoe_all_prices is None:
-            log.debug("Was not able to fetch prices, fill in with artificial data")
-            # Fill in with artificial data making low prices at night
-            entsoe_all_prices = generate_artificial_price_data()
-        else:
+        try:
+            entsoe_all_prices = [
+                {
+                    "time": datetime.fromisoformat(value["time"]),
+                    "price": float(value["price"]),
+                }
+                for value in entsoe_entity_prices.attributes.get("prices")
+            ]
             min_available_time = dt.now() + timedelta(hours=6)
             if (
                 max_time_in_data := max(value["time"] for value in entsoe_all_prices)
@@ -238,13 +228,22 @@ class EntsoeStatsCalculator(SensorEntity):
                         max_time_in_data + timedelta(hours=1)
                     )
                 )
-        return list(
-            {
-                "time": datetime.fromisoformat(value["time"]),
-                "price": float(value["price"]),
-            }
-            for value in entsoe_all_prices
+        except:
+            log.debug(
+                "No price information: %s",
+                str(entsoe_entity_prices),
+            )
+            log.debug("Was not able to fetch prices, fill in with artificial data")
+            # Fill in with artificial data making low prices at night
+            entsoe_all_prices = generate_artificial_price_data()
+        # Update backup variables
+        self._previous_entsoe_entity_prices = entsoe_entity_prices
+        self.hass.states.async_set(
+            entity_id=self._variable_with_saved_latest_entsoe_prices,
+            new_state=entsoe_entity_prices.state,
+            attributes=entsoe_entity_prices.attributes,
         )
+        return entsoe_all_prices
 
     async def async_update(self):
         log.debug("Sensor update called")
